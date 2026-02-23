@@ -8,46 +8,55 @@ import { calculateBestAIMove, evaluateBoardState } from './utils/ai';
 import { GAME_MODES, pickFocusedPair } from './utils/gameModes';
 import './App.css';
 
+// Auto-detect mobile on load (screen width + touch)
+const detectMobile = () =>
+  window.innerWidth < 768 ||
+  /Android|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
 function App() {
   const playerGame = useGameBoard();
   const aiGame = useGameBoard();
-  const { profiles, activeProfileId, activeProfile, switchProfile, updateHighScore, incrementGamesPlayed, recordMoveStats } = useProfile();
+  const { profiles, activeProfileId, activeProfile, switchProfile, updateHighScore, recordMoveStats } = useProfile();
 
-  const [nextTiles, setNextTiles] = useState([2, 4]); // Queue of upcoming pieces
-  const [modeLevel, setModeLevel] = useState(0);
+  const [nextTiles, setNextTiles] = useState([2, 4]);
   const [aiMode, setAiMode] = useState(true);
-  const [history, setHistory] = useState([]); // Up to 100 history states
+  const [history, setHistory] = useState([]);
+  const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
+  const [aiReasoning, setAiReasoning] = useState('Waiting for player to drop piece...');
 
-  // Game Mode state
+  // Game Mode
   const [gameMode, setGameMode] = useState('classic');
   const [focusedPair, setFocusedPair] = useState(() => pickFocusedPair());
   const [moveCount, setMoveCount] = useState(0);
 
-  // Modals
-  const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
+  // Device layout
+  const [isMobile, setIsMobile] = useState(detectMobile);
 
-  // AI State
-  const [aiReasoning, setAiReasoning] = useState("Waiting for player to drop piece...");
+  // Allow manual override via a small toggle
+  useEffect(() => {
+    const handleResize = () => setIsMobile(detectMobile());
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
-  // Update high score whenever current score changes
+  // Update high score whenever score changes
   useEffect(() => {
     updateHighScore(playerGame.score);
   }, [playerGame.score]);
 
   // Tile generator — delegates to the active game mode
-  const generateNewTile = () => {
+  const generateNewTile = (currentMoveCount = moveCount, currentScore = playerGame.score, currentPair = focusedPair) => {
     const mode = GAME_MODES[gameMode];
-    return mode.generateTile(playerGame.score, moveCount, focusedPair);
+    return mode.generateTile(currentScore, currentMoveCount, currentPair);
   };
 
-  // When switching modes, reset the focused pair and move counter
+  // Switch game mode and re-seed tile queue
   const handleModeChange = (modeId) => {
-    setGameMode(modeId);
-    setFocusedPair(pickFocusedPair());
-    setMoveCount(0);
-    // Immediately re-seed the next tile queue with the new mode's values
-    const newMode = GAME_MODES[modeId];
     const newPair = pickFocusedPair();
+    const newMode = GAME_MODES[modeId];
+    setGameMode(modeId);
+    setFocusedPair(newPair);
+    setMoveCount(0);
     setNextTiles([
       newMode.generateTile(playerGame.score, 0, newPair),
       newMode.generateTile(playerGame.score, 0, newPair),
@@ -56,11 +65,9 @@ function App() {
 
   const handleUndo = () => {
     if (history.length === 0) return;
-
-    const previousHistory = [...history];
-    const snapshot = previousHistory.pop();
-    setHistory(previousHistory);
-
+    const prev = [...history];
+    const snapshot = prev.pop();
+    setHistory(prev);
     playerGame.loadState(snapshot.playerBoardState, snapshot.playerScore, snapshot.playerCombo);
     aiGame.loadState(snapshot.aiBoardState, snapshot.aiScore, snapshot.aiCombo);
     setNextTiles(snapshot.nextTiles);
@@ -68,21 +75,15 @@ function App() {
   };
 
   const handlePlayerColumnClick = (colIndex) => {
-    // 1. Record stats for profiling
     const boardCopy = playerGame.boardState.map(col => col.map(t => ({ ...t })));
     const currentTile = nextTiles[0];
     const topTileInCol = boardCopy[colIndex].length > 0 ? boardCopy[colIndex][boardCopy[colIndex].length - 1].value : 0;
     const isBlockingMove = topTileInCol > 0 && currentTile < topTileInCol;
-
-    // Calculate staging score by evaluating the board *after* this drop is hypothetically completed
     boardCopy[colIndex].push({ value: currentTile, isMerging: false, isNew: true });
     const stagingScore = evaluateBoardState(boardCopy);
-
-    // Note: We'll record maxCombo asynchronously via an effect on playerGame.combo in a real app, 
-    // but for now we pass the current combo as the move starts.
     recordMoveStats(playerGame.combo, stagingScore, isBlockingMove);
 
-    // 2. Save state snapshot before dropping tile
+    // Save snapshot
     setHistory(prev => {
       const snapshot = {
         playerBoardState: playerGame.boardState.map(col => col.map(t => ({ ...t }))),
@@ -92,66 +93,71 @@ function App() {
         aiScore: aiGame.score,
         aiCombo: aiGame.combo,
         nextTiles: [...nextTiles],
-        aiReasoning: aiReasoning
+        aiReasoning,
       };
       const newHistory = [...prev, snapshot];
-      if (newHistory.length > 100) newHistory.shift(); // Keep max 100 undos
+      if (newHistory.length > 100) newHistory.shift();
       return newHistory;
     });
 
-    // 3. Drop for player using the current tile
     playerGame.dropTile(colIndex, currentTile);
 
-    // 4. Trigger AI Drop (if active)
     if (aiMode) {
-      setAiReasoning("Thinking...");
+      setAiReasoning('Thinking...');
       setTimeout(() => {
-        const aiBoardCopy = aiGame.boardState.map(col => col.map(tile => ({ ...tile }))); // Send clean copy
+        const aiBoardCopy = aiGame.boardState.map(col => col.map(tile => ({ ...tile })));
         const move = calculateBestAIMove(aiBoardCopy, currentTile);
         if (move.bestCol !== -1) {
           aiGame.dropTile(move.bestCol, currentTile);
           setAiReasoning(move.reasoning);
         }
-      }, 800); // 800ms delay gives player's tile time to drop and merge first
+      }, 800);
     }
 
-    // 5. Queue logic: shift queue down, generate new end
     const nextMoveCount = moveCount + 1;
     setMoveCount(nextMoveCount);
     const mode = GAME_MODES[gameMode];
     setNextTiles(prev => [prev[1], mode.generateTile(playerGame.score, nextMoveCount, focusedPair)]);
   };
 
-  if (!activeProfile) {
-    return <div>Loading...</div>;
-  }
+  if (!activeProfile) return <div>Loading...</div>;
 
-  // Render Tile Preview Component
-  const renderTilePreview = () => (
-    <div style={{ display: 'flex', gap: '40px', alignItems: 'flex-end', justifyContent: 'center', marginBottom: '10px' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px' }}>
-        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 'bold' }}>Current</span>
-        <div style={{ position: 'relative', width: '60px', height: '60px' }}>
-          <div className="tile" style={{ bottom: '0', position: 'relative', backgroundColor: `var(--color-${nextTiles[0]}, var(--color-2))` }}>
-            {nextTiles[0]}
-          </div>
+  // Tile preview (shown once, above the boards)
+  const tilePreview = (
+    <div className="tile-preview">
+      <div className="tile-preview-item">
+        <span className="tile-preview-label">Now</span>
+        <div className="tile-preview-tile tile"
+          style={{ position: 'relative', bottom: 0, backgroundColor: `var(--color-${nextTiles[0]}, var(--color-2))` }}>
+          {nextTiles[0]}
         </div>
       </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '5px', opacity: 0.5 }}>
-        <span style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 'bold' }}>Next Up</span>
-        <div style={{ position: 'relative', width: '35px', height: '35px' }}>
-          <div className="tile" style={{ bottom: '0', position: 'relative', width: '35px', height: '35px', fontSize: '1rem', borderRadius: '6px', backgroundColor: `var(--color-${nextTiles[1]}, var(--color-2))` }}>
-            {nextTiles[1]}
-          </div>
+      <div className="tile-preview-item" style={{ opacity: 0.5 }}>
+        <span className="tile-preview-label">Next</span>
+        <div className="tile-preview-tile tile tile--small"
+          style={{ position: 'relative', bottom: 0, backgroundColor: `var(--color-${nextTiles[1]}, var(--color-2))` }}>
+          {nextTiles[1]}
         </div>
       </div>
     </div>
   );
 
+  // Mobile AI strip (below player board — no AI board shown)
+  const mobileAiStrip = aiMode && (
+    <div className="mobile-ai-strip">
+      <div className="mobile-ai-strip__header">
+        <span className="pulse-dot" />
+        <span>AI COACH</span>
+        <span className="mobile-ai-strip__score">{aiGame.score.toLocaleString()}</span>
+      </div>
+      <p className="mobile-ai-strip__text">{aiReasoning}</p>
+    </div>
+  );
+
   return (
-    <div className={`app-container ${aiMode ? 'ai-active' : ''}`}>
-      <div style={{ width: '100%', maxWidth: '600px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px' }}>
+    <div className={`app-container ${aiMode && !isMobile ? 'ai-active' : ''}`}>
+      {/* Controls */}
+      <div className="controls-bar">
         <Header
           playerScore={playerGame.score}
           aiScore={aiGame.score}
@@ -164,57 +170,45 @@ function App() {
           onOpenAnalysis={() => setIsAnalysisOpen(true)}
         />
 
-        {/* AI Toggle + Game Mode Row */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', width: '100%' }}>
-          <button
-            className="undo-btn"
-            onClick={() => setAiMode(!aiMode)}
-            style={{
-              fontSize: '1rem', width: 'auto', padding: '5px 15px', borderRadius: '4px',
-              backgroundColor: aiMode ? '#5fbcff' : '#1a1e24', color: aiMode ? 'white' : 'var(--text-dim)',
-              fontWeight: 'bold', border: aiMode ? 'none' : '1px solid #272c33', cursor: 'pointer'
-            }}>
-            {aiMode ? 'AI Coach: Active' : 'Enable AI Coach'}
+        <div className="controls-row">
+          {/* AI Toggle */}
+          <button className="ctrl-btn ctrl-btn--ai" onClick={() => setAiMode(!aiMode)}
+            style={{ backgroundColor: aiMode ? '#5fbcff' : '#1a1e24', color: aiMode ? '#1a1e24' : 'var(--text-dim)', border: aiMode ? 'none' : '1px solid #272c33' }}>
+            {aiMode ? '🤖 AI: On' : '🤖 AI: Off'}
           </button>
 
-          {/* Game Mode Selector */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', justifyContent: 'center' }}>
+          {/* Mode Dropdown */}
+          <select
+            className="ctrl-select"
+            value={gameMode}
+            onChange={e => handleModeChange(e.target.value)}
+          >
             {Object.values(GAME_MODES).map(mode => (
-              <button
-                key={mode.id}
-                title={mode.description}
-                onClick={() => handleModeChange(mode.id)}
-                style={{
-                  fontSize: '0.75rem',
-                  width: 'auto',
-                  padding: '4px 10px',
-                  borderRadius: '20px',
-                  backgroundColor: gameMode === mode.id ? '#ffb731' : '#1a1e24',
-                  color: gameMode === mode.id ? '#1a1e24' : 'var(--text-dim)',
-                  fontWeight: 'bold',
-                  border: gameMode === mode.id ? 'none' : '1px solid #272c33',
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {mode.label}
-              </button>
+              <option key={mode.id} value={mode.id}>{mode.label}</option>
             ))}
-          </div>
+          </select>
 
-          {/* Active Mode Description */}
-          <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>
-            {GAME_MODES[gameMode].description}
-            {gameMode === 'focused' && ` (${focusedPair[0]} & ${focusedPair[1]})`}
-          </p>
+          {/* Device toggle (manual override) */}
+          <button className="ctrl-btn ctrl-btn--device" onClick={() => setIsMobile(m => !m)}
+            title={isMobile ? 'Switch to Desktop layout' : 'Switch to Mobile layout'}>
+            {isMobile ? '📱' : '🖥️'}
+          </button>
         </div>
+
+        {/* Mode description — one clean line, always visible */}
+        <p className="mode-description">
+          {GAME_MODES[gameMode].description}
+          {gameMode === 'focused' && ` (${focusedPair[0]} & ${focusedPair[1]})`}
+        </p>
       </div>
 
+      {/* Tile Preview — once, centered */}
+      {tilePreview}
+
+      {/* Boards */}
       <div className="boards-container">
         {/* Player Board */}
         <div className="board-wrapper">
-          {renderTilePreview()}
           <div className="board-title">You</div>
           <div style={{ position: 'relative', width: '320px', height: '400px', display: 'flex', justifyContent: 'center' }}>
             <Board boardState={playerGame.boardState} handleColumnClick={handlePlayerColumnClick} />
@@ -226,14 +220,12 @@ function App() {
           </div>
         </div>
 
-        {/* AI Coach Board */}
-        {aiMode && (
-          <div style={{ display: 'flex', gap: '30px', alignItems: 'flex-start' }}>
+        {/* AI Board — desktop only */}
+        {aiMode && !isMobile && (
+          <div className="ai-board-section">
             <div className="board-wrapper">
-              {renderTilePreview()}
               <div className="board-title">AI Coach</div>
               <div style={{ position: 'relative', width: '320px', height: '400px', display: 'flex', justifyContent: 'center' }}>
-                {/* Block clicks on AI board */}
                 <div style={{ position: 'absolute', inset: 0, zIndex: 100 }} />
                 <Board boardState={aiGame.boardState} handleColumnClick={() => { }} />
                 {aiGame.combo > 1 && (
@@ -244,10 +236,9 @@ function App() {
               </div>
             </div>
 
-            {/* AI Explanation Box (Side) */}
             <div className="ai-reasoning-box">
               <div className="ai-badge">
-                <span className="pulse-dot"></span>
+                <span className="pulse-dot" />
                 AI LOGIC
               </div>
               <p>{aiReasoning}</p>
@@ -255,6 +246,9 @@ function App() {
           </div>
         )}
       </div>
+
+      {/* Mobile AI strip */}
+      {isMobile && mobileAiStrip}
 
       <AnalysisModal
         profile={activeProfile}
