@@ -5,6 +5,7 @@ import AnalysisModal from './components/AnalysisModal';
 import { useGameBoard } from './hooks/useGameBoard';
 import { useProfile } from './hooks/useProfile';
 import { calculateBestAIMove, evaluateBoardState } from './utils/ai';
+import { GAME_MODES, pickFocusedPair } from './utils/gameModes';
 import './App.css';
 
 function App() {
@@ -17,6 +18,11 @@ function App() {
   const [aiMode, setAiMode] = useState(true);
   const [history, setHistory] = useState([]); // Up to 100 history states
 
+  // Game Mode state
+  const [gameMode, setGameMode] = useState('classic');
+  const [focusedPair, setFocusedPair] = useState(() => pickFocusedPair());
+  const [moveCount, setMoveCount] = useState(0);
+
   // Modals
   const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
 
@@ -28,17 +34,24 @@ function App() {
     updateHighScore(playerGame.score);
   }, [playerGame.score]);
 
-  // Dynamic Tile Difficulty
+  // Tile generator — delegates to the active game mode
   const generateNewTile = () => {
-    let maxPower = 5; // Default max is 32 (2^5)
+    const mode = GAME_MODES[gameMode];
+    return mode.generateTile(playerGame.score, moveCount, focusedPair);
+  };
 
-    // Increase power cap by 1 for every 50,000 points
-    const difficultyScaling = Math.floor(playerGame.score / 50000);
-    maxPower += difficultyScaling;
-
-    // Generate a random power between 1 (value 2) and maxPower
-    const randPower = Math.floor(Math.random() * maxPower) + 1;
-    return Math.pow(2, randPower);
+  // When switching modes, reset the focused pair and move counter
+  const handleModeChange = (modeId) => {
+    setGameMode(modeId);
+    setFocusedPair(pickFocusedPair());
+    setMoveCount(0);
+    // Immediately re-seed the next tile queue with the new mode's values
+    const newMode = GAME_MODES[modeId];
+    const newPair = pickFocusedPair();
+    setNextTiles([
+      newMode.generateTile(playerGame.score, 0, newPair),
+      newMode.generateTile(playerGame.score, 0, newPair),
+    ]);
   };
 
   const handleUndo = () => {
@@ -89,7 +102,7 @@ function App() {
     // 3. Drop for player using the current tile
     playerGame.dropTile(colIndex, currentTile);
 
-    // 2. Trigger AI Drop (if active)
+    // 4. Trigger AI Drop (if active)
     if (aiMode) {
       setAiReasoning("Thinking...");
       setTimeout(() => {
@@ -102,8 +115,11 @@ function App() {
       }, 800); // 800ms delay gives player's tile time to drop and merge first
     }
 
-    // 3. Queue logic: shift queue down, generate new end
-    setNextTiles(prev => [prev[1], generateNewTile()]);
+    // 5. Queue logic: shift queue down, generate new end
+    const nextMoveCount = moveCount + 1;
+    setMoveCount(nextMoveCount);
+    const mode = GAME_MODES[gameMode];
+    setNextTiles(prev => [prev[1], mode.generateTile(playerGame.score, nextMoveCount, focusedPair)]);
   };
 
   if (!activeProfile) {
@@ -148,17 +164,51 @@ function App() {
           onOpenAnalysis={() => setIsAnalysisOpen(true)}
         />
 
-        {/* Toggle Button */}
-        <button
-          className="undo-btn"
-          onClick={() => setAiMode(!aiMode)}
-          style={{
-            fontSize: '1rem', width: 'auto', padding: '5px 15px', borderRadius: '4px',
-            backgroundColor: aiMode ? '#5fbcff' : '#1a1e24', color: aiMode ? 'white' : 'var(--text-dim)',
-            fontWeight: 'bold', border: aiMode ? 'none' : '1px solid #272c33', cursor: 'pointer'
-          }}>
-          {aiMode ? 'AI Coach: Active' : 'Enable AI Coach'}
-        </button>
+        {/* AI Toggle + Game Mode Row */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', width: '100%' }}>
+          <button
+            className="undo-btn"
+            onClick={() => setAiMode(!aiMode)}
+            style={{
+              fontSize: '1rem', width: 'auto', padding: '5px 15px', borderRadius: '4px',
+              backgroundColor: aiMode ? '#5fbcff' : '#1a1e24', color: aiMode ? 'white' : 'var(--text-dim)',
+              fontWeight: 'bold', border: aiMode ? 'none' : '1px solid #272c33', cursor: 'pointer'
+            }}>
+            {aiMode ? 'AI Coach: Active' : 'Enable AI Coach'}
+          </button>
+
+          {/* Game Mode Selector */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', justifyContent: 'center' }}>
+            {Object.values(GAME_MODES).map(mode => (
+              <button
+                key={mode.id}
+                title={mode.description}
+                onClick={() => handleModeChange(mode.id)}
+                style={{
+                  fontSize: '0.75rem',
+                  width: 'auto',
+                  padding: '4px 10px',
+                  borderRadius: '20px',
+                  backgroundColor: gameMode === mode.id ? '#ffb731' : '#1a1e24',
+                  color: gameMode === mode.id ? '#1a1e24' : 'var(--text-dim)',
+                  fontWeight: 'bold',
+                  border: gameMode === mode.id ? 'none' : '1px solid #272c33',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Active Mode Description */}
+          <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>
+            {GAME_MODES[gameMode].description}
+            {gameMode === 'focused' && ` (${focusedPair[0]} & ${focusedPair[1]})`}
+          </p>
+        </div>
       </div>
 
       <div className="boards-container">
