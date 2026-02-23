@@ -1,0 +1,65 @@
+:root {
+  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 700;
+
+  --bg-color: #3b424f;
+  --board-bg: #272c33;
+  --text-main: #ffffff;
+  --text-dim: #9aa0a6;
+
+  /* Tile Colors */
+  --color-2: #ff726d;
+  --color-4: #af7aff;
+  --color-8: #ffb731;
+  --color-16: #75c967;
+  --color-32: #5fbcff;
+  --color-64: #f75590;
+  --color-128: #00d2d3;
+  --color-256: #54a0ff;
+  --color-512: #5f27cd;
+  --color-1024: #ff9f43;
+  --color-2048: #ee5253;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: var(--bg-color);
+  color: var(--text-main);
+}
+
+#root {
+  max-width: 100vw;
+  /* Allow wider layout for split screen */
+  margin: 0 auto;
+  padding: 1rem;
+  text-align: center;
+  width: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: white;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  font-weight: bold;
+  color: var(--bg-color);
+}
+
+button:hover {
+  opacity: 0.9;
+}
